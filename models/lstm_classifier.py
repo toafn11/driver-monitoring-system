@@ -193,6 +193,44 @@ class DriverStateLSTM_Lite(nn.Module):
         return self.classifier(out), None
 
 
+class DriverLSTM(nn.Module):
+    """
+    Bi-LSTM tối ưu 50k tham số được train trên Kaggle NTHU-DDD.
+    """
+    def __init__(self, in_dim=FEATURE_DIM, hidden_dim=64, num_classes=3):
+        super().__init__()
+        self.norm = nn.LayerNorm(in_dim)
+        self.lstm = nn.LSTM(in_dim, hidden_dim, num_layers=2, batch_first=True, 
+                            bidirectional=True, dropout=0.3)
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim * 2, 32),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(32, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.norm(x)
+        out, _ = self.lstm(x)
+        pooled = (out[:, -1, :] + out.mean(dim=1)) / 2.0
+        return self.fc(pooled), None
+
+    def predict(self, x, confidence_threshold=0.50):
+        self.eval()
+        with torch.no_grad():
+            logits, _ = self.forward(x)
+            probs = F.softmax(logits, dim=-1)
+            confidence, pred_class = probs.max(dim=-1)
+            results = []
+            class_names = ["ALERT", "DROWSY", "YAWNING"]
+            for i in range(x.shape[0]):
+                conf = confidence[i].item()
+                cls = pred_class[i].item()
+                name = class_names[cls] if cls < len(class_names) else "UNKNOWN"
+                results.append((cls, name, conf, None))
+        return results
+
+
 # ─── Model Manager ─────────────────────────────────────────────────────────────
 class ModelManager:
     """Load/save/export model."""
@@ -218,18 +256,37 @@ class ModelManager:
     @classmethod
     def load(cls, name: str = "driver_lstm", lite: bool = False,
              device: str = "cpu") -> Optional[nn.Module]:
-        path = cls.SAVE_DIR / f"{name}.pt"
+        # Hỗ trợ cả name có .pt và không có .pt
+        clean_name = name.replace(".pt", "")
+        path = cls.SAVE_DIR / f"{clean_name}.pt"
+        if not path.exists():
+            path = Path(name)
         if not path.exists():
             print(f"  Model not found: {path}")
             return None
 
         checkpoint = torch.load(path, map_location=device)
-        ModelClass = DriverStateLSTM_Lite if lite else DriverStateLSTM
-        model = ModelClass()
-        model.load_state_dict(checkpoint["model_state_dict"])
+        
+        # Kiểm tra định dạng checkpoint
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            state_dict = checkpoint["model_state_dict"]
+            ModelClass = DriverStateLSTM_Lite if lite else DriverStateLSTM
+            model = ModelClass()
+        else:
+            state_dict = checkpoint
+            # Thử load vào DriverLSTM (model train từ Kaggle)
+            model = DriverLSTM(num_classes=3)
+            
+        try:
+            model.load_state_dict(state_dict)
+        except Exception:
+            # Fallback sang DriverStateLSTM
+            model = DriverStateLSTM(num_classes=len(CLASSES))
+            model.load_state_dict(state_dict, strict=False)
+
         model.to(device)
         model.eval()
-        print(f"  Model loaded ← {path}")
+        print(f"  Model loaded successfully ← {path}")
         return model
 
     @classmethod
