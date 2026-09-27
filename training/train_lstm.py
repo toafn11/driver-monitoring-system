@@ -1,11 +1,11 @@
 """
 training/train_lstm.py
 =======================
-Script huấn luyện LSTM classifier.
-Hỗ trợ:
-  - Train từ đầu trên NTHU-DDD
-  - Fine-tune từ pre-extracted dataset
-  - Class-weighted loss (chống imbalanced data)
+LSTM classifier training script.
+Supports:
+  - Training from scratch on NTHU-DDD
+  - Fine-tuning from a pre-extracted dataset
+  - Class-weighted loss (handles imbalanced data)
   - Early stopping + LR scheduling
   - Training curves + confusion matrix
 """
@@ -44,9 +44,9 @@ CONFIG = {
     "val_split":       0.15,
     "test_split":      0.10,
     "device":          "cuda" if torch.cuda.is_available() else "cpu",
-    "lite_mode":       False,    # True = dùng model nhỏ hơn
+    "lite_mode":       False,    # True = use the smaller model
     "model_name":      "driver_lstm_v1",
-    "use_weighted_sampler": True,  # Quan trọng: chống class imbalance
+    "use_weighted_sampler": True,  # Important: mitigates class imbalance
 }
 
 RESULTS_DIR = Path("training/results")
@@ -56,25 +56,25 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 def load_or_build_dataset(data_dir: str = "data/processed",
                            nthu_path: Optional[str] = None) -> tuple:
     """
-    Load dataset đã xử lý, hoặc build từ NTHU-DDD nếu chưa có.
+    Loads a pre-processed dataset, or builds one from NTHU-DDD if not available.
     """
     builder = DatasetBuilder(data_dir)
     X_path = Path(data_dir) / "X_train.npy"
 
     if X_path.exists():
-        print(f"[DATA] Loading pre-built dataset từ {data_dir}")
+        print(f"[DATA] Loading pre-built dataset from {data_dir}")
         X, y = builder.load_dataset("train")
     elif nthu_path and Path(nthu_path).exists():
-        print(f"[DATA] Building từ NTHU-DDD: {nthu_path}")
+        print(f"[DATA] Building from NTHU-DDD: {nthu_path}")
         X, y = builder.process_nthu_ddd(nthu_path)
         if len(X) > 0:
-            # Phân tích bias
+            # Analyze bias
             builder.analyze_dataset_bias(X, y)
             # Augment
             X, y = builder.augment_sequences(X, y)
             builder.save_dataset(X, y, "train")
     else:
-        print("[DATA] Không có dataset thực → tạo SYNTHETIC dataset để demo")
+        print("[DATA] No real dataset found → generating SYNTHETIC dataset for demo")
         X, y = generate_synthetic_dataset()
 
     return X, y
@@ -82,8 +82,8 @@ def load_or_build_dataset(data_dir: str = "data/processed",
 
 def generate_synthetic_dataset(n_per_class: int = 800) -> tuple:
     """
-    Tạo dataset tổng hợp có đặc tính thực tế để test pipeline.
-    Giả lập EAR, MAR, head pose cho từng trạng thái.
+    Generates a synthetic dataset with realistic characteristics to test the pipeline.
+    Simulates EAR, MAR, and head pose for each driver state.
     """
     print("[SYNTH] Generating synthetic dataset...")
     X_all, y_all = [], []
@@ -97,7 +97,7 @@ def generate_synthetic_dataset(n_per_class: int = 800) -> tuple:
             t = np.linspace(0, 1, seq_len)
 
             if cls_name == "ALERT":
-                # Mắt mở bình thường, đầu thẳng, nhìn thẳng
+                # Eyes normally open, head upright, looking straight ahead
                 seq[:, 0] = 0.32 + np.random.normal(0, 0.02, seq_len)  # EAR_L
                 seq[:, 1] = 0.31 + np.random.normal(0, 0.02, seq_len)  # EAR_R
                 seq[:, 2] = 0.315 + np.random.normal(0, 0.015, seq_len) # EAR_avg
@@ -107,18 +107,18 @@ def generate_synthetic_dataset(n_per_class: int = 800) -> tuple:
                 seq[:, 9] = 0.02                                          # Low PERCLOS
 
             elif cls_name == "DROWSY":
-                # Mắt dần nhắm, chớp chậm, đầu gật
+                # Eyes gradually closing, slow blinks, head nodding
                 blink = np.sin(t * np.pi * 2) * 0.08
                 seq[:, 0] = np.clip(0.22 + blink + np.random.normal(0, 0.02, seq_len), 0.05, 0.4)
                 seq[:, 2] = seq[:, 0]
                 seq[:, 1] = seq[:, 0] + np.random.normal(0, 0.01, seq_len)
                 seq[:, 3] = 0.15 + np.random.normal(0, 0.05, seq_len)
-                seq[:, 5] = -0.1 * t + np.random.normal(0, 0.03, seq_len)  # Đầu dần cúi
-                seq[:, 9] = 0.20 + t * 0.15                                   # PERCLOS tăng
+                seq[:, 5] = -0.1 * t + np.random.normal(0, 0.03, seq_len)  # Head gradually nodding down
+                seq[:, 9] = 0.20 + t * 0.15                                   # PERCLOS increasing
                 seq[:, 10] = t * 0.3                                           # Eyes closed duration
 
             elif cls_name == "YAWNING":
-                # Miệng mở rộng đột ngột
+                # Mouth suddenly opens wide
                 yawn_profile = np.zeros(seq_len)
                 start = seq_len // 3
                 end = 2 * seq_len // 3
@@ -129,15 +129,15 @@ def generate_synthetic_dataset(n_per_class: int = 800) -> tuple:
                 seq[:, 11] = yawn_profile / 0.5 * 0.7                    # Mouth open duration
 
             elif cls_name == "DISTRACTED":
-                # Đầu quay sang một bên, gaze lệch
+                # Head turning to one side, gaze deviated
                 direction = np.random.choice([-1, 1])
                 seq[:, 0] = 0.30 + np.random.normal(0, 0.02, seq_len)
                 seq[:, 2] = seq[:, 0]
-                seq[:, 4] = direction * (0.3 + t * 0.1) + np.random.normal(0, 0.03, seq_len)  # Yaw lệch
-                seq[:, 7] = direction * 0.4 + np.random.normal(0, 0.05, seq_len)               # Gaze_x lệch
+                seq[:, 4] = direction * (0.3 + t * 0.1) + np.random.normal(0, 0.03, seq_len)  # Yaw deviated
+                seq[:, 7] = direction * 0.4 + np.random.normal(0, 0.05, seq_len)               # Gaze_x deviated
                 seq[:, 9] = 0.05
 
-            # Clip tất cả về range hợp lệ
+            # Clip all values to valid range
             seq = np.clip(seq, -1.0, 2.0)
             X_all.append(seq)
             y_all.append(cls_idx)
@@ -162,7 +162,7 @@ def train(config: dict = CONFIG, nthu_path: str = None):
     print(f"[DATA] Total: {len(X)} sequences, Shape: {X.shape}")
 
     # 2. Subject-disjoint split
-    # Dùng stratified split để đảm bảo phân phối nhãn đồng đều
+    # Use stratified split to ensure even label distribution
     X_train, X_tmp, y_train, y_tmp = train_test_split(
         X, y, test_size=config["val_split"] + config["test_split"],
         stratify=y, random_state=42
@@ -173,7 +173,7 @@ def train(config: dict = CONFIG, nthu_path: str = None):
     )
     print(f"[DATA] Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
 
-    # 3. Tạo DataLoaders
+    # 3. Create DataLoaders
     X_train_t = torch.FloatTensor(X_train).to(device)
     y_train_t = torch.LongTensor(y_train).to(device)
     X_val_t   = torch.FloatTensor(X_val).to(device)
@@ -183,7 +183,7 @@ def train(config: dict = CONFIG, nthu_path: str = None):
 
     train_ds = TensorDataset(X_train_t, y_train_t)
 
-    # Weighted sampler để chống class imbalance
+    # Weighted sampler to handle class imbalance
     if config["use_weighted_sampler"]:
         counts = np.bincount(y_train)
         weights_per_class = 1.0 / (counts + 1e-6)
@@ -202,7 +202,7 @@ def train(config: dict = CONFIG, nthu_path: str = None):
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"[MODEL] {ModelClass.__name__} | Parameters: {n_params:,}")
 
-    # 5. Loss với class weights
+    # 5. Loss with class weights
     class_counts = np.bincount(y_train)
     class_weights = torch.FloatTensor(
         [len(y_train) / (len(CLASSES) * c + 1e-6) for c in class_counts]
@@ -272,11 +272,11 @@ def train(config: dict = CONFIG, nthu_path: str = None):
         else:
             patience_counter += 1
             if patience_counter >= config["patience"]:
-                print(f"  Early stopping tại epoch {epoch}")
+                print(f"  Early stopping at epoch {epoch}")
                 break
 
     # 8. Test evaluation
-    print("\n[TEST] Đánh giá trên test set...")
+    print("\n[TEST] Evaluating on test set...")
     best_model = ModelManager.load(config["model_name"], device=config["device"])
     best_model.eval()
     with torch.no_grad():
@@ -331,9 +331,9 @@ def _plot_confusion_matrix(y_true, y_pred, class_names: list, name: str):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Train Driver State LSTM")
-    parser.add_argument("--nthu",  type=str, default=None, help="Path đến NTHU-DDD dataset")
+    parser.add_argument("--nthu",  type=str, default=None, help="Path to NTHU-DDD dataset")
     parser.add_argument("--data",  type=str, default="data/processed")
-    parser.add_argument("--lite",  action="store_true", help="Dùng model nhỏ hơn")
+    parser.add_argument("--lite",  action="store_true", help="Use the smaller model")
     parser.add_argument("--epochs", type=int, default=60)
     args = parser.parse_args()
 

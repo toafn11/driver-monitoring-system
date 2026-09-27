@@ -22,25 +22,25 @@ from typing import Optional
 
 CLASSES = ["ALERT", "DROWSY", "YAWNING", "DISTRACTED"]
 NUM_CLASSES = len(CLASSES)
-FEATURE_DIM = 12
+FEATURE_DIM = 20   # 12 core + 8 temporal dynamics (see core/face_analyzer.py FEATURE_NAMES)
 SEQ_LEN = 30
 
 
 class DriverStateLSTM(nn.Module):
     """
-    LSTM 2 lớp + Attention mechanism + Fully Connected classifier.
+    2-layer Bidirectional LSTM + Temporal Self-Attention + FC classifier.
 
     Architecture:
-        Input: (batch, seq_len=30, features=12)
+        Input: (batch, seq_len=30, features=20)
         → LayerNorm
-        → LSTM(hidden=128, layers=2, bidirectional=True, dropout=0.4)
-        → Temporal Self-Attention (học frame nào quan trọng nhất)
+        → BiLSTM(hidden=128, layers=2, dropout=0.4)
+        → Temporal Self-Attention (learns which frames matter most)
         → FC(256 → 128 → num_classes)
         → Softmax
 
-    Tại sao Bidirectional LSTM?
-    - Cho phép model nhìn cả "trước" và "sau" trong sequence
-    - Phát hiện pattern như: "mắt hé → nhắm từ từ → ngáp" tốt hơn
+    Why Bidirectional LSTM?
+    - Allows the model to see both "past" and "future" context in the sequence
+    - Better at detecting patterns like: "eye half-open → slowly closing → yawn"
     """
 
     def __init__(
@@ -57,7 +57,7 @@ class DriverStateLSTM(nn.Module):
         self.bidirectional = bidirectional
         self.num_directions = 2 if bidirectional else 1
 
-        # Input normalization (xử lý scale khác nhau giữa features)
+        # Input normalization (handles different feature scales)
         self.input_norm = nn.LayerNorm(feature_dim)
 
         # LSTM
@@ -70,9 +70,9 @@ class DriverStateLSTM(nn.Module):
             bidirectional=bidirectional,
         )
 
-        lstm_out_size = hidden_size * self.num_directions  # 256 nếu bidirectional
+        lstm_out_size = hidden_size * self.num_directions  # 256 if bidirectional
 
-        # Self-Attention: học frame nào trong sequence quan trọng nhất
+        # Self-Attention: learns which frames in the sequence are most important
         self.attention = TemporalAttention(lstm_out_size)
 
         # Classifier head

@@ -1,42 +1,42 @@
 """
 training/dataset_builder.py
 ============================
-Xây dựng training dataset từ các nguồn:
+Builds the training dataset from multiple sources:
   1. NTHU-DDD (video clips, labels: drowsy/non-drowsy)
-  2. MRL Eye Dataset (ảnh mắt mở/nhắm)
-  3. Video tự thu thập (collect_data.py)
+  2. MRL Eye Dataset (open/closed eye images)
+  3. Self-collected video (collect_data.py)
 
-PHÂN TÍCH VÀ PHÒNG TRÁNH BIAS CHO TỪNG DATASET:
-=================================================
+BIAS ANALYSIS AND MITIGATION FOR EACH DATASET:
+===============================================
 
 ### NTHU-DDD ###
-- ✅ Đa dạng: 36 subjects, 5 điều kiện (ngày/đêm, kính/không kính)
-- ⚠️ BIAS 1: Camera cố định dashboard → model có thể học vị trí đầu mặc định
-  → GIẢI PHÁP: Chỉ extract GEOMETRIC FEATURES (EAR/MAR/head pose), KHÔNG dùng pixel
-- ⚠️ BIAS 2: "Drowsy" thường đi kèm đầu cúi xuống, "Alert" đầu thẳng
-  → GIẢI PHÁP: Augment với head pose variations khi extract features
-- ⚠️ BIAS 3: Số lượng alert >> drowsy (imbalanced)
-  → GIẢI PHÁP: Weighted loss / oversample drowsy class
+- ✅ Diverse: 36 subjects, 5 conditions (day/night, glasses/no glasses)
+- ⚠️ BIAS 1: Fixed dashboard camera → model may learn default head position
+  → SOLUTION: Extract only GEOMETRIC FEATURES (EAR/MAR/head pose), NOT raw pixels
+- ⚠️ BIAS 2: "Drowsy" often accompanied by head nodding down, "Alert" head upright
+  → SOLUTION: Augment with head pose variations during feature extraction
+- ⚠️ BIAS 3: Alert samples >> drowsy samples (imbalanced)
+  → SOLUTION: Weighted loss / oversample drowsy class
 
 ### MRL Eye Dataset ###
-- ✅ 84,898 ảnh, đa dạng thiết bị hồng ngoại
-- ⚠️ BIAS 1: Background đen (infrared) nhất quán → model học background
-  → GIẢI PHÁP: Crop chỉ vùng mắt, threshold loại bỏ viền đen
-- ⚠️ BIAS 2: Nhiều ảnh bị blur hoặc occlusion → nếu không lọc sẽ học noise
-  → GIẢI PHÁP: Lọc theo độ sắc nét (Laplacian variance)
-- ⚠️ BIAS 3: Metadata không đồng nhất (nhiều người đeo kính)
-  → GIẢI PHÁP: Tách validation set đảm bảo phân phối đều
+- ✅ 84,898 images, diverse infrared devices
+- ⚠️ BIAS 1: Consistent black (infrared) background → model learns background
+  → SOLUTION: Crop only the eye region, threshold to remove black border
+- ⚠️ BIAS 2: Many blurry or occluded images → learning noise if not filtered
+  → SOLUTION: Filter by sharpness (Laplacian variance)
+- ⚠️ BIAS 3: Inconsistent metadata (many subjects wearing glasses)
+  → SOLUTION: Ensure even distribution in the validation set split
 
 ### StateFarm Distracted Driver ###
-- ⚠️ BIAS NGHIÊM TRỌNG: Cùng drivers xuất hiện ở train và test
-  → GIẢI PHÁP: Driver-disjoint split bắt buộc
-- ⚠️ BIAS: Background xe nhất quán (cùng loại xe)
-  → GIẢI PHÁP: Dùng để phân loại HÀNH VI (tay, điện thoại), không phải face
+- ⚠️ CRITICAL BIAS: Same drivers appear in both train and test sets
+  → SOLUTION: Mandatory driver-disjoint split
+- ⚠️ BIAS: Consistent vehicle background (same car model)
+  → SOLUTION: Use for BEHAVIOR classification (hands, phone), not face
 
-CHIẾN LƯỢC CHUNG:
-- KHÔNG train model học từ pixel raw của full frame
-- Chỉ train từ GEOMETRIC FEATURES (EAR, MAR, yaw, pitch, roll, gaze_x, gaze_y...)
-- Sequence-based (30 frames) → LSTM học temporal pattern, không học static pose
+GENERAL STRATEGY:
+- Do NOT train models to learn from raw pixel values of the full frame
+- Train only from GEOMETRIC FEATURES (EAR, MAR, yaw, pitch, roll, gaze_x, gaze_y...)
+- Sequence-based (30 frames) → LSTM learns temporal patterns, not static poses
 """
 
 import os
@@ -54,9 +54,9 @@ from core.face_analyzer import FaceAnalyzer
 
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-SEQ_LEN    = 30    # Số frame mỗi sequence (khoảng 1 giây ở 30fps)
-STEP_SIZE  = 10    # Bước nhảy giữa các sequence (overlap)
-FEATURE_DIM = 12   # Số features mỗi frame
+SEQ_LEN    = 30    # Number of frames per sequence (approx. 1 second at 30 fps)
+STEP_SIZE  = 10    # Step size between sequences (overlap)
+FEATURE_DIM = 12   # Number of features per frame
 
 FEATURE_NAMES = [
     "ear_left", "ear_right", "ear_avg",
@@ -83,8 +83,8 @@ LABEL_MAP = {
 
 class DatasetBuilder:
     """
-    Extract geometric feature sequences từ video files.
-    Output: numpy arrays (X, y) cho LSTM training.
+    Extracts geometric feature sequences from video files.
+    Output: numpy arrays (X, y) for LSTM training.
     """
 
     def __init__(self, output_dir: str = "data/processed"):
@@ -95,8 +95,8 @@ class DatasetBuilder:
     # ─── NTHU-DDD ─────────────────────────────────────────────────────────────
     def process_nthu_ddd(self, dataset_path: str, split: str = "train") -> tuple:
         """
-        Xử lý NTHU-DDD dataset.
-        Cấu trúc thư mục chuẩn:
+        Processes the NTHU-DDD dataset.
+        Expected directory structure:
           dataset_path/
             training_data/
               drowsy/   ← video .avi files
@@ -105,9 +105,9 @@ class DatasetBuilder:
               drowsy/
               nondrowsy/
 
-        CHỐNG BIAS:
-        - Split theo SUBJECT ID (subject-disjoint), không random
-        - Chỉ extract frame khi face detection confidence cao
+        BIAS MITIGATION:
+        - Split by SUBJECT ID (subject-disjoint), not random
+        - Only extract frames when face detection confidence is high
         """
         dataset_path = Path(dataset_path)
         X_all, y_all = [], []
@@ -115,10 +115,10 @@ class DatasetBuilder:
         for label_name, label_id in [("nondrowsy", 0), ("drowsy", 1)]:
             folder = dataset_path / f"{split}ing_data" / label_name
             if not folder.exists():
-                # Thử cấu trúc thay thế
+                # Try alternative directory structure
                 folder = dataset_path / label_name
             if not folder.exists():
-                print(f"  [SKIP] Không tìm thấy: {folder}")
+                print(f"  [SKIP] Not found: {folder}")
                 continue
 
             video_files = list(folder.glob("*.avi")) + list(folder.glob("*.mp4"))
@@ -137,20 +137,20 @@ class DatasetBuilder:
         print(f"  → {len(X)} sequences | Class dist: {np.bincount(y)}")
         return X, y
 
-    # ─── MRL Eye Dataset (dùng để train EAR threshold calibration) ────────────
+    # ─── MRL Eye Dataset (used to train EAR threshold calibration) ────────────
     def process_mrl_eye(self, dataset_path: str) -> tuple:
         """
-        MRL Eye Dataset: ảnh mắt hồng ngoại, 2 class (open/closed).
+        MRL Eye Dataset: infrared eye images, 2 classes (open/closed).
 
-        CHỐNG BIAS:
-        1. Crop chỉ phần trung tâm ảnh (loại bỏ viền đen artifact)
-        2. Lọc ảnh mờ (Laplacian variance < threshold)
-        3. Chuẩn hóa histogram để loại bỏ bias ánh sáng
-        4. KHÔNG dùng pixel trực tiếp → convert sang binary (threshould)
-           rồi tính EAR-like ratio từ ảnh tĩnh
+        BIAS MITIGATION:
+        1. Crop only the center region of the image (removes black border artifacts)
+        2. Filter blurry images (Laplacian variance < threshold)
+        3. Histogram normalization to remove lighting bias
+        4. Do NOT use pixels directly → convert to binary (threshold)
+           then compute EAR-like ratio from the static image
 
-        NOTE: Dataset này dùng để validate/calibrate ngưỡng EAR,
-              KHÔNG dùng để train LSTM chính.
+        NOTE: This dataset is used to validate/calibrate the EAR threshold,
+              NOT for training the main LSTM.
         """
         dataset_path = Path(dataset_path)
         data = []
@@ -170,12 +170,12 @@ class DatasetBuilder:
                 if img is None:
                     continue
 
-                # 1. Lọc ảnh mờ
+                # 1. Filter blurry images
                 blur_score = cv2.Laplacian(img, cv2.CV_64F).var()
                 if blur_score < 50:
                     continue
 
-                # 2. Crop viền đen (threshold)
+                # 2. Crop black border (threshold)
                 _, binary = cv2.threshold(img, 10, 255, cv2.THRESH_BINARY)
                 coords = cv2.findNonZero(binary)
                 if coords is None:
@@ -189,7 +189,7 @@ class DatasetBuilder:
                 # 3. Histogram equalization
                 equalized = cv2.equalizeHist(cropped)
 
-                # 4. Tính EAR-like từ ảnh tĩnh
+                # 4. Compute EAR-like ratio from static image
                 # (vertical brightness / horizontal brightness ratio)
                 resized = cv2.resize(equalized, (32, 16))
                 mean_intensity = resized.mean() / 255.0
@@ -213,16 +213,16 @@ class DatasetBuilder:
         print(f"  → Saved {len(df)} samples → {out_path}")
         return df, out_path
 
-    # ─── Extract sequences từ video ──────────────────────────────────────────
+    # ─── Extract sequences from video ────────────────────────────────────────
     def _extract_sequences_from_video(self, video_path: Path, label: int,
                                        min_confidence: float = 0.8) -> tuple:
         """
-        Extract sliding window sequences từ 1 video file.
-        Chỉ lấy frame khi face detection confidence đủ cao.
+        Extracts sliding window sequences from a single video file.
+        Only includes frames where face detection confidence is sufficiently high.
 
-        CHỐNG BIAS:
-        - Skip các frame đầu video (driver setup, không đại diện)
-        - Chỉ lấy sequence khi >= 80% frame có face detection
+        BIAS MITIGATION:
+        - Skip frames at the start of the video (driver setup, not representative)
+        - Only include sequences where >= 80% of frames have face detections
         """
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
@@ -234,7 +234,7 @@ class DatasetBuilder:
 
         all_features = []
         frame_idx = 0
-        skip_frames = int(fps * 2)  # Skip 2 giây đầu (setup time)
+        skip_frames = int(fps * 2)  # Skip the first 2 seconds (setup time)
 
         while True:
             ret, frame = cap.read()
@@ -245,7 +245,7 @@ class DatasetBuilder:
             if frame_idx < skip_frames:
                 continue
 
-            # Resize để tăng tốc độ xử lý
+            # Resize to speed up processing
             h, w = frame.shape[:2]
             if w > 640:
                 scale = 640 / w
@@ -255,18 +255,18 @@ class DatasetBuilder:
             if feats is not None:
                 all_features.append(self._feats_to_array(feats))
             else:
-                # Frame không detect được → dùng zero vector
+                # Face not detected in this frame → use zero vector
                 all_features.append(np.zeros(FEATURE_DIM, dtype=np.float32))
 
         cap.release()
 
-        # Tạo sliding window sequences
+        # Build sliding window sequences
         X_seqs, y_seqs = [], []
         feat_arr = np.array(all_features, dtype=np.float32)
 
         for i in range(0, len(feat_arr) - SEQ_LEN, STEP_SIZE):
             seq = feat_arr[i:i + SEQ_LEN]
-            # Check: sequence phải có >= 80% frame detect được (non-zero)
+            # Check: sequence must have >= 80% frames with a detected face (non-zero)
             valid_ratio = (seq.sum(axis=1) > 0).mean()
             if valid_ratio >= 0.6:
                 X_seqs.append(seq)
@@ -276,40 +276,40 @@ class DatasetBuilder:
 
     @staticmethod
     def _feats_to_array(f: "FaceFeatures") -> np.ndarray:
-        """Convert FaceFeatures → numpy array (FEATURE_DIM,)."""
+        """Converts FaceFeatures → numpy array of shape (FEATURE_DIM,)."""
         return np.array([
             f.ear_left, f.ear_right, f.ear_avg,
             f.mar,
-            f.yaw / 90.0,    # Normalize head pose về [-1, 1]
+            f.yaw / 90.0,    # Normalize head pose to [-1, 1]
             f.pitch / 90.0,
             f.roll / 90.0,
             f.gaze_x,
             f.gaze_y,
             f.perclos,
-            min(f.eyes_closed_duration / 5.0, 1.0),  # Cap ở 5 giây
+            min(f.eyes_closed_duration / 5.0, 1.0),  # Cap at 5 seconds
             min(f.mouth_open_duration / 3.0, 1.0),
         ], dtype=np.float32)
 
-    # ─── Phân tích bias dataset ────────────────────────────────────────────────
+    # ─── Dataset bias analysis ────────────────────────────────────────────────
     def analyze_dataset_bias(self, X: np.ndarray, y: np.ndarray) -> dict:
         """
-        Phân tích các dấu hiệu bias trong dataset đã extract.
-        In báo cáo chi tiết.
+        Analyzes signs of bias in the extracted dataset.
+        Prints a detailed report.
         """
         report = {}
         print("\n" + "="*60)
-        print("PHÂN TÍCH BIAS DATASET")
+        print("DATASET BIAS ANALYSIS")
         print("="*60)
 
         # 1. Class imbalance
         class_counts = np.bincount(y)
-        print(f"\n1. PHÂN PHỐI NHÃN:")
+        print(f"\n1. LABEL DISTRIBUTION:")
         for i, count in enumerate(class_counts):
             print(f"   Class {i}: {count} sequences ({count/len(y)*100:.1f}%)")
         report["class_counts"] = class_counts.tolist()
 
         # 2. Feature distribution per class
-        print(f"\n2. PHÂN PHỐI FEATURES THEO CLASS:")
+        print(f"\n2. FEATURE DISTRIBUTION BY CLASS:")
         feature_names = ["EAR_L", "EAR_R", "EAR_avg", "MAR",
                          "Yaw", "Pitch", "Roll", "Gaze_X", "Gaze_Y",
                          "PERCLOS", "EyesClosed", "MouthOpen"]
@@ -322,40 +322,40 @@ class DatasetBuilder:
             for fname, fval in zip(feature_names, cls_data):
                 print(f"     {fname:15s}: {fval:.4f}")
 
-        # 3. Kiểm tra separation tuyến tính (EAR có đủ phân biệt không?)
+        # 3. Check linear separability (is EAR sufficiently discriminative?)
         if len(class_counts) >= 2:
             ear_class0 = X[y == 0, :, 2].mean()  # EAR avg, class 0 (alert)
             ear_class1 = X[y == 1, :, 2].mean()  # EAR avg, class 1 (drowsy)
             separation = abs(ear_class0 - ear_class1)
             print(f"\n3. EAR SEPARATION (Alert vs Drowsy): {separation:.4f}")
             if separation < 0.02:
-                print("   ⚠️  CẢNH BÁO: EAR không đủ phân biệt → có thể bị bias")
+                print("   ⚠️  WARNING: EAR is not sufficiently discriminative → possible bias")
             else:
-                print("   ✅ EAR có khả năng phân biệt tốt")
+                print("   ✅ EAR has good discriminative ability")
 
-        # 4. Kiểm tra temporal consistency
+        # 4. Check temporal consistency
         seq_std = X.std(axis=1).mean()  # Std over time dimension
         print(f"\n4. TEMPORAL VARIANCE (std over time): {seq_std:.4f}")
         if seq_std < 0.01:
-            print("   ⚠️  CẢNH BÁO: Features quá ổn định → có thể đang extract từ ảnh tĩnh")
+            print("   ⚠️  WARNING: Features are too stable → may be extracting from static images")
         else:
-            print("   ✅ Features có đủ temporal variation")
+            print("   ✅ Features have sufficient temporal variation")
 
         print("="*60 + "\n")
         return report
 
-    # ─── Data Augmentation (chống overfitting) ────────────────────────────────
+    # ─── Data Augmentation (prevents overfitting) ────────────────────────────
     @staticmethod
     def augment_sequences(X: np.ndarray, y: np.ndarray,
                           target_counts: Optional[dict] = None) -> tuple:
         """
-        Augment geometric feature sequences để balance dataset và tăng robustness.
+        Augments geometric feature sequences to balance the dataset and increase robustness.
 
-        Augmentation trên GEOMETRIC FEATURES (không phải pixel):
-        1. Gaussian noise nhỏ (simulate measurement error)
-        2. Time reversal (nháy mắt ngược)
-        3. Head pose jitter (thay đổi nhẹ góc đầu)
-        4. Oversample class thiểu số
+        Augmentation applied to GEOMETRIC FEATURES (not pixels):
+        1. Small Gaussian noise (simulates measurement error)
+        2. Time reversal (reversed blink)
+        3. Head pose jitter (slight head angle variation)
+        4. Oversample the minority class
         """
         if target_counts is None:
             counts = np.bincount(y)
@@ -375,15 +375,15 @@ class DatasetBuilder:
                 idx = np.random.choice(cls_mask)
                 seq = X[idx].copy()
 
-                # Augmentation 1: Gaussian noise (nhỏ thôi)
+                # Augmentation 1: Small Gaussian noise
                 noise = np.random.normal(0, 0.008, seq.shape).astype(np.float32)
-                noise[:, 4:7] *= 2.0  # Head pose có thể noise nhiều hơn
+                noise[:, 4:7] *= 2.0  # Head pose can have more noise
 
-                # Augmentation 2: Đôi khi đảo ngược thời gian
+                # Augmentation 2: Occasionally reverse time
                 if np.random.random() < 0.3:
                     seq = seq[::-1].copy()
 
-                # Augmentation 3: Jitter head pose nhẹ
+                # Augmentation 3: Slight head pose jitter
                 if np.random.random() < 0.5:
                     pose_jitter = np.random.normal(0, 0.03, (SEQ_LEN, 3)).astype(np.float32)
                     seq[:, 4:7] = np.clip(seq[:, 4:7] + pose_jitter, -1, 1)
@@ -400,7 +400,7 @@ class DatasetBuilder:
 
     # ─── Save / Load ──────────────────────────────────────────────────────────
     def save_dataset(self, X: np.ndarray, y: np.ndarray, name: str = "train"):
-        """Lưu dataset đã xử lý."""
+        """Saves the processed dataset."""
         np.save(self.output_dir / f"X_{name}.npy", X)
         np.save(self.output_dir / f"y_{name}.npy", y)
         meta = {
@@ -413,7 +413,7 @@ class DatasetBuilder:
         print(f"  Saved: {self.output_dir}/X_{name}.npy  ({X.shape})")
 
     def load_dataset(self, name: str = "train") -> tuple:
-        """Load dataset đã save."""
+        """Loads a previously saved dataset."""
         X = np.load(self.output_dir / f"X_{name}.npy")
         y = np.load(self.output_dir / f"y_{name}.npy")
         return X, y
