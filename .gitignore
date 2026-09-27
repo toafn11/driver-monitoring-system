@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Data (too large for git)
+data/raw/
+data/processed/
+data/custom/
+*.avi
+*.mp4
+*.mkv
+
+# Large model files — download separately
+models/face_landmarker.task
+models/pretrained/
+
+# KEEP: trained weights nhỏ (< 10MB) — dùng Git LFS hoặc bỏ luôn
+# models/saved/*.pt    ← uncommit dòng này nếu muốn lưu weights
+
+# Kaggle output
+kaggle_output/
+
+# Logs / results plots (optional — bỏ comment nếu muốn track)
+# training/results/
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Zip
+*.zip
