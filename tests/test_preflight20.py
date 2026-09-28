@@ -6,11 +6,43 @@ from pathlib import Path
 from unittest.mock import patch
 import cv2
 import numpy as np
-from training.preflight20 import preflight
+from training.preflight20 import preflight, sequential_probe
 from training.prepare20 import build, cache_videos
 
 
 class PreflightTest(unittest.TestCase):
+    def test_failed_seek_recovers_only_with_complete_sequential_decode(self):
+        real_capture = cv2.VideoCapture
+        class BrokenSeek:
+            def __init__(self, path):
+                self.cap = real_capture(path)
+                self.sought = False
+            def isOpened(self): return self.cap.isOpened()
+            def get(self, prop): return self.cap.get(prop)
+            def set(self, prop, value):
+                self.sought = True
+                return False
+            def read(self):
+                if self.sought: return False, None
+                return self.cap.read()
+            def release(self): self.cap.release()
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); manifest = self.fixture(root)
+            with patch('cv2.VideoCapture', BrokenSeek):
+                report = preflight(manifest, root/'audit.json', 10)
+                self.assertEqual(report['failed'], 0)
+                self.assertTrue(all(r['warnings'] for r in report['videos']))
+                self.assertTrue(all(r['sequential_audit']['decoded_frames']==48 for r in report['videos']))
+                # Recovering decode must not override a separate FPS failure.
+                self.assertEqual(preflight(manifest, root/'audit15.json', 15)['failed'], 6)
+
+    def test_early_eof_is_not_accepted(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); self.fixture(root)
+            result = sequential_probe(root/'train_ALERT.avi', 100)
+            self.assertFalse(result['passed'])
+            self.assertEqual(result['decoded_frames'], 48)
+
     def fixture(self, root):
         rows = []
         for split in ('train', 'val', 'test'):

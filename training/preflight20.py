@@ -5,6 +5,30 @@ import math
 from pathlib import Path
 
 
+def sequential_probe(path, expected_frames):
+    """Reopen and decode without seeking; do not silently accept an early EOF."""
+    import cv2
+    cap = cv2.VideoCapture(path)
+    decoded = 0
+    try:
+        if not cap.isOpened():
+            return dict(decoded_frames=0, passed=False, reason="Cannot reopen video")
+        while True:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                break
+            decoded += 1
+            if decoded % 5000 == 0:
+                print(f"Sequential audit: {Path(path).name}: {decoded} frames", flush=True)
+    finally:
+        cap.release()
+    # Only allow one frame of container count rounding, not a percentage of a video.
+    passed = decoded >= max(2, math.ceil(expected_frames) - 1)
+    return dict(decoded_frames=decoded, expected_frames=expected_frames, passed=passed,
+                reason="Sequential decode reached advertised length" if passed else
+                "Sequential decode ended early; investigate file/decoder/frame-count metadata")
+
+
 def read_manifest(manifest):
     from training.prepare20 import validate_rows
     manifest = Path(manifest).resolve()
@@ -24,7 +48,7 @@ def preflight(manifest, output, sample_fps=None):
     records = []
     for path in sorted({r["path"] for r in rows}):
         cap = cv2.VideoCapture(path)
-        record = dict(path=path, issues=[], probes=[])
+        record = dict(path=path, issues=[], warnings=[], probes=[])
         try:
             fps = float(cap.get(cv2.CAP_PROP_FPS))
             count = float(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -36,6 +60,7 @@ def preflight(manifest, output, sample_fps=None):
                 record["duration_s"] = count / fps
                 if sample_fps is not None and fps < sample_fps:
                     record["issues"].append(f"FPS {fps:.6f} below target {sample_fps}")
+                failed_probes = []
                 for index in sorted({0, int(count // 2), max(0, int(count) - 2)}):
                     cap.set(cv2.CAP_PROP_POS_FRAMES, index)
                     ok, frame = cap.read()
@@ -43,7 +68,16 @@ def preflight(manifest, output, sample_fps=None):
                     record["probes"].append(dict(frame=index, decoded=bool(ok and frame is not None),
                                                   timestamp_s=timestamp if math.isfinite(timestamp) else None))
                     if not ok or frame is None:
-                        record["issues"].append(f"Decode probe failed at frame {index}")
+                        failed_probes.append(index)
+                if failed_probes:
+                    cap.release()
+                    print(f"Seek probe failed: {path}; checking sequential decode", flush=True)
+                    result = sequential_probe(path, count)
+                    record["sequential_audit"] = result
+                    if result["passed"]:
+                        record["warnings"].append(f"Seek probes failed at {failed_probes}; sequential decode passed")
+                    else:
+                        record["issues"].append(f"Decode probes failed at {failed_probes}; {result['reason']} ({result['decoded_frames']}/{count} frames)")
         except Exception as exc:
             record["issues"].append(f"{type(exc).__name__}: {exc}")
         finally:
@@ -53,7 +87,7 @@ def preflight(manifest, output, sample_fps=None):
     report = dict(videos=records, total=len(records),
                   failed=sum(bool(r["issues"]) for r in records), target_fps=sample_fps,
                   suggested_fps=min(10, math.floor(min(rates))) if rates and min(rates) >= 1 else None,
-                  limitation="First/middle/end decode probes only. Timestamps are diagnostic; extraction assumes CFR frame_index/FPS. VFR is not certified by this audit.")
+                  limitation="First/middle/end probes; failed seeks trigger full sequential decode with at most one missing frame allowed for count rounding. Decoder-concealed corruption is not detected. Timestamps are diagnostic; extraction assumes CFR frame_index/FPS. VFR is not certified by this audit.")
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
