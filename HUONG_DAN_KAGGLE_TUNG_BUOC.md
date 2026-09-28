@@ -12,7 +12,7 @@ Ba notebook thay thế bản một lượt `kaggle_train20.ipynb`:
 2. `kaggle_02_build20.ipynb`: ghép cache thành các tập train/validation/test.
 3. `kaggle_03_train20.ipynb`: huấn luyện và so sánh 12/20 đặc trưng.
 
-Mã được ghim ở commit `5a28ee8`; không tự lấy thay đổi mới từ main. Notebook lấy mã từ GitHub, nên cần Internet On. Kiểm tra tên notebook và các input trước khi chạy.
+Mã hiện tại được ghim ở commit `a637d62`; không tự lấy thay đổi mới từ main. Notebook lấy mã từ GitHub, nên cần Internet On. Kiểm tra tên notebook và các input trước khi chạy.
 
 ## Bước 0 — Giữ lại kết quả cũ
 
@@ -45,7 +45,9 @@ Kết quả cần xem:
 - `failed = 0` và `suggested_fps >= 10` thì có thể dùng `SAMPLE_FPS = 10`.
 - Nếu gợi ý nhỏ hơn 10 hoặc có lỗi, dừng để đọc các mục `issues`. Không bỏ video hoặc ép 10 FPS bằng cách nhân đôi frame. Nếu quyết định dùng FPS thấp hơn, cập nhật **tất cả** nhóm trích xuất và notebook ghép dữ liệu cùng giá trị nguyên đó.
 
-Giới hạn: đây là kiểm tra nhanh, không giải mã hết video và không chứng nhận video là CFR. Các timestamp thử được ghi để chẩn đoán; extractor vẫn dùng frame_index/FPS. Nếu nghi video có tốc độ frame biến đổi, cần kiểm tra timestamp đầy đủ và nâng cấp bộ đọc trước khi công bố kết quả về thời gian chớp mắt. Một video vượt kiểm tra nhanh vẫn có thể lỗi ở đoạn khác khi trích xuất thật.
+Kiểm tra nhanh vẫn không chứng nhận mọi frame đều nguyên vẹn. Nếu số frame OpenCV thấp hơn metadata, bản mới gọi FFprobe: chỉ chấp nhận chênh lệch khi hai bộ đọc cùng đếm được số frame thực tế, FFprobe không báo lỗi và timestamp tăng liên tục. Chênh lệch được giữ trong warnings, không xóa khỏi báo cáo.
+
+Khi trích xuất, mọi video được FFprobe đọc timestamp từng frame; OpenCV đọc tuần tự và phải khớp số frame. Lấy mẫu dựa trên timestamp thật, không lấy chỉ số frame chia FPS trung bình. Timestamp thiếu/trùng/lùi hoặc hai bộ đọc không khớp sẽ bị chặn. Không nhân đôi frame; cửa sổ có khoảng trống thời gian lớn bị bộ lọc chất lượng loại. Hai bộ đọc không đảm bảo phát hiện mọi lỗi hình ảnh bị decoder che giấu.
 
 ## Bước 2 — Trích xuất thành 4 nhóm
 
@@ -64,8 +66,8 @@ Chọn **Save Version → Save & Run All**. Mỗi nhóm khoảng 30–31 video. 
 
 Một nhóm thành công phải có:
 
-- `cache20_v3/`: các file `.npz` đã trích xuất.
-- `cache20_v3/progress_N.json`: trạng thái từng video, mọi mục là `ok`.
+- `cache20_v4/`: các file `.npz` đã trích xuất.
+- `cache20_v4/progress_N.json`: trạng thái từng video, mọi mục là `ok`.
 - `shard_N_complete.json`: dấu xác nhận nhóm hoàn thành.
 
 Không có dấu complete thì chưa xem là nhóm hoàn tất. Nếu có video lỗi, pipeline xử lý tiếp các video khác rồi báo thất bại; cache thành công vẫn được giữ tại thư mục output. Kiểm tra Kaggle có lưu được output của phiên thất bại hay không, rồi tải/lưu các file đó trước khi tạo phiên mới.
@@ -73,12 +75,12 @@ Không có dấu complete thì chưa xem là nhóm hoàn tất. Nếu có video 
 ### Khi cần chạy tiếp
 
 1. Gắn output của phiên trước qua **Add Input → Notebook output**; nếu output phiên lỗi không dùng được trực tiếp, tạo dataset riêng tư từ cache tải về.
-2. Giữ nguyên thư mục `cache20_v3` khi đóng gói. Notebook tự tìm thư mục này trong Input.
+2. Giữ nguyên thư mục `cache20_v4` khi đóng gói. Notebook tự tìm thư mục này trong Input.
 3. Giữ nguyên input video, model, commit mã, FPS và chỉ số nhóm; chạy lại cùng nhóm.
 4. File cache khớp sẽ được đọc từ input, video thiếu sẽ trích xuất vào working. Cache không khớp thì không tái sử dụng.
 5. Khi ghép, attach cả output cũ lẫn output chạy tiếp: output chạy tiếp không sao chép các cache đã đọc từ input.
 
-Khóa cache kiểm tra đường dẫn video, kích thước, thời điểm sửa file, FPS, hash model và hash bộ trích xuất khuôn mặt. Nếu Kaggle thay đường dẫn/metadata nguồn giữa các phiên, cache có thể không khớp dù tên video giống nhau. Khi đó không đổi tên cache để ép dùng; kiểm tra input/version, hoặc trích xuất lại. Không chạy hai tiến trình ghi cùng một thư mục cache đồng thời.
+Khóa cache có phiên bản timestamp mới và kiểm tra đường dẫn video, kích thước, thời điểm sửa file, FPS, hash model và hash bộ trích xuất khuôn mặt. Nếu Kaggle thay đường dẫn/metadata nguồn giữa các phiên, cache có thể không khớp dù tên video giống nhau. Khi đó không đổi tên cache để ép dùng; kiểm tra input/version, hoặc trích xuất lại. Không chạy hai tiến trình ghi cùng một thư mục cache đồng thời.
 
 ## Bước 3 — Ghép dataset
 
@@ -97,9 +99,9 @@ Notebook yêu cầu đủ dấu complete của 4 nhóm đúng phiên bản. Sau 
 
 Với 10 FPS: mỗi chuỗi có 40 frame, cửa sổ danh nghĩa 4 giây, bước trượt 10 frame. Dữ liệu giữ tách người: fold 1–3 train, fold 4 validation, fold 5 test.
 
-Output hoàn chỉnh phải có `processed20_v3/metadata.json`, `manifest.csv`, `train.npz`, `val.npz`, `test.npz`. Chỉ khi có metadata hoàn tất mới chuyển sang train.
+Output hoàn chỉnh phải có `processed20_v4/metadata.json`, `manifest.csv`, `train.npz`, `val.npz`, `test.npz`. Chỉ khi có metadata hoàn tất mới chuyển sang train.
 
-Nếu ghép lỗi giữa chừng trong cùng phiên, chọn tên DATA mới, ví dụ `processed20_v3_retry`; khi dùng tên khác phải sửa bộ tìm thư mục trong notebook 03 cho khớp. Không xóa cache để sửa lỗi thư mục dataset không rỗng.
+Nếu ghép lỗi giữa chừng trong cùng phiên, chọn tên DATA mới, ví dụ `processed20_v4_retry`; khi dùng tên khác phải sửa bộ tìm thư mục trong notebook 03 cho khớp. Không xóa cache để sửa lỗi thư mục dataset không rỗng.
 
 ## Bước 4 — Train model
 
@@ -122,7 +124,7 @@ Tải/lưu toàn bộ thư mục `experiment_...`, đặc biệt:
 - `gru12_seed42/best.pt`, `gru20_seed42/best.pt`.
 - `history.json` và các cấu hình/báo cáo đi kèm trong từng thư mục.
 - `complete.json` xác nhận cả hai lượt train đã chạy xong.
-- `processed20_v3/metadata.json` để giữ đúng FPS, số frame và chuẩn hóa.
+- `processed20_v4/metadata.json` để giữ đúng FPS, số frame và chuẩn hóa.
 
 Sau khi chốt model bằng validation, bật cell test trong phiên còn biến DATA/CHOSEN, hoặc tạo notebook đánh giá riêng: attach dataset bước 3 và output model bước 4, đặt DATA và CHOSEN đến đúng đường dẫn rồi gọi `evaluate`. Không chạy lại cell train chỉ để lấy biến. Giữ test ngoài vòng chỉnh model.
 
@@ -146,3 +148,21 @@ Nếu notebook hiện in `Code revision: 8aeacc1`:
 5. Nếu `failed = 0`, tiếp tục bước 2 của hướng dẫn. Nếu vẫn lỗi, xem/gửi mục `issues` và `sequential_audit` của video đó trong `inventory20.json`; chưa bật trích xuất.
 
 Cảnh báo xung đột dopamine-rl/gym trong log không phải lỗi dừng preflight này. Không cần hạ gym để xử lý lỗi video. Kiểm tra đã dùng đúng revision mới trước khi thử tiếp.
+
+
+## Bản hiện tại a637d62 — tiếp tục từ lỗi video người 50
+
+Phần cập nhật 5a28ee8 bên trên là lịch sử; dùng a637d62 cho lượt chạy mới.
+
+1. Import lại **cả ba notebook** từ các URL main bên trên. Nên giữ bản cũ để tham khảo nhưng không chạy trộn các phiên bản.
+2. Restart kernel/session, không Factory reset. Cell đầu phải in `Code revision: a637d62`.
+3. Notebook 01: giữ `RUN_EXTRACTION = False`, `SAMPLE_FPS = 10`. Run All để kiểm tra.
+4. Với video người 50, nếu kiểm tra trên Kaggle khớp log đã cung cấp (18.174 frame và timestamp hợp lệ), lỗi metadata sẽ trở thành WARNING. Chỉ tiếp tục khi tổng `failed = 0`.
+5. Đặt `RUN_EXTRACTION = True`, chạy nhóm 0 trước. Khi nhóm 0 thành công, chạy tiếp nhóm 1, 2, 3. Giữ `NUM_SHARDS = 4`.
+6. Dùng output các nhóm để chạy notebook 02, rồi output dataset để chạy notebook 03 theo các bước phía trên.
+
+Cache/dataset mới mang tên `cache20_v4` và `processed20_v4`. Không tái sử dụng cache từ bản tính thời gian bằng FPS trung bình, kể cả cache 10 FPS; khóa cache mới chủ động không khớp bản cũ. Không cần xóa cache cũ.
+
+FFprobe sẽ giải mã thêm một lượt để lấy timestamp trước MediaPipe, nên có chi phí thời gian bổ sung. Không hứa bản này nhanh hơn bản trước; mục tiêu là tính đúng đặc trưng thời gian và xử lý chênh lệch metadata có bằng chứng. Các trường hợp lỗi được giữ báo cáo thay vì tự bỏ video.
+
+Kiểm thử cục bộ dùng video tổng hợp, detector mô phỏng và phản hồi FFprobe mô phỏng (máy kiểm thử không có ffprobe). Chưa chạy lại bản này trên toàn bộ RLDD/Kaggle. Sau bước audit và nhóm 0, cần kiểm tra output thực tế trước khi kết luận mọi video đều xử lý được.
