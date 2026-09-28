@@ -12,7 +12,7 @@ Ba notebook thay thế bản một lượt `kaggle_train20.ipynb`:
 2. `kaggle_02_build20.ipynb`: ghép cache thành các tập train/validation/test.
 3. `kaggle_03_train20.ipynb`: huấn luyện và so sánh 12/20 đặc trưng.
 
-Mã được ghim ở commit `8aeacc1`; không tự lấy thay đổi mới từ main. Notebook lấy mã từ GitHub, nên cần Internet On. Kiểm tra tên notebook và các input trước khi chạy.
+Mã được ghim ở commit `5a28ee8`; không tự lấy thay đổi mới từ main. Notebook lấy mã từ GitHub, nên cần Internet On. Kiểm tra tên notebook và các input trước khi chạy.
 
 ## Bước 0 — Giữ lại kết quả cũ
 
@@ -131,3 +131,18 @@ Model này mới phân biệt ALERT/DROWSY theo nhãn video; không chứng minh
 ## Trạng thái bàn giao
 
 Đã kiểm thử bằng video tổng hợp và model mô phỏng cho các trường hợp FPS thấp, tiếp tục sau lỗi, đọc cache từ input, tách người và train/evaluate nhỏ. Chưa chạy lại trên toàn bộ RLDD sau bản sửa này. Không có số accuracy mới được khẳng định.
+
+
+## Cập nhật 29/09 — Decode probe failed
+
+Bản `5a28ee8` đọc tuần tự lại video khi kiểm tra nhảy frame thất bại. Chỉ khi số frame giải mã đạt độ dài khai báo (cho phép sai số làm tròn tối đa 1 frame) mới chuyển lỗi nhảy frame thành warning. Nếu kết thúc sớm, vẫn chặn và ghi `sequential_audit` trong inventory; không tự bỏ video. Cách này không phát hiện mọi trường hợp bộ giải mã che giấu frame hỏng và chưa chứng nhận VFR.
+
+Nếu notebook hiện in `Code revision: 8aeacc1`:
+
+1. Trong cell đầu, đổi `REV = '8aeacc1'` thành `REV = '5a28ee8'` ở cả ba notebook. Hoặc import lại các notebook mới từ GitHub theo đường dẫn bên trên.
+2. Restart session/kernel trước khi chạy lại để Python không dùng module cũ trong bộ nhớ. Không chọn Factory reset để tránh xóa output chưa lưu.
+3. Giữ `RUN_EXTRACTION = False`, `SAMPLE_FPS = 10` và chạy lại notebook 01.
+4. Chờ đọc tuần tự các video gặp lỗi; sẽ có log `Seek probe failed ... checking sequential decode`. Bước này không gọi MediaPipe, nhưng vẫn phải giải mã video nên có thể mất vài phút.
+5. Nếu `failed = 0`, tiếp tục bước 2 của hướng dẫn. Nếu vẫn lỗi, xem/gửi mục `issues` và `sequential_audit` của video đó trong `inventory20.json`; chưa bật trích xuất.
+
+Cảnh báo xung đột dopamine-rl/gym trong log không phải lỗi dừng preflight này. Không cần hạ gym để xử lý lỗi video. Kiểm tra đã dùng đúng revision mới trước khi thử tiếp.
