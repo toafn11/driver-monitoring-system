@@ -51,6 +51,12 @@ class PreparationTest(unittest.TestCase):
                 calls = DetectorFixture.calls
                 extract_video(rows[0]['path'], model, 15, root/'cache')
                 self.assertEqual(DetectorFixture.calls, calls)
+                extract_video(rows[0]['path'], model, 15, root/'new_cache',
+                              cache_sources=[root/'cache'], cache_only=True)
+                self.assertEqual(DetectorFixture.calls, calls)
+                with self.assertRaises(FileNotFoundError):
+                    extract_video(rows[0]['path'], model, 10, root/'new_cache',
+                                  cache_sources=[root/'cache'], cache_only=True)
                 build(manifest, model, root/'data', root/'cache')
             splits, metadata = load_data(root/'data')
             self.assertEqual(splits['test']['X'].shape, (2, 60, 20))

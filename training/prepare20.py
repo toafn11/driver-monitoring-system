@@ -83,10 +83,11 @@ def validate_rows(rows):
     return sorted(split_labels["train"])
 
 
-def extract_video(path, model, sample_fps, cache_dir):
+def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_only=False):
     # Imported lazily so manifest checks work without MediaPipe/OpenCV.
     import cv2
     from core.face_analyzer import FaceAnalyzer
+    sample_fps = int(sample_fps) if float(sample_fps).is_integer() else float(sample_fps)
     model = Path(model)
     stat = Path(path).stat()
     signature = dict(path=str(Path(path).resolve()), size=stat.st_size,
@@ -98,9 +99,15 @@ def extract_video(path, model, sample_fps, cache_dir):
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / f"{key}.npz"
-    if cached.exists():
-        with np.load(cached, allow_pickle=False) as data:
-            return data["raw"], data["times"], data["valid"]
+    for candidate in [cached] + [Path(root) / cached.name for root in cache_sources]:
+        if candidate.exists():
+            with np.load(candidate, allow_pickle=False) as data:
+                raw, times, valid = data["raw"], data["times"], data["valid"]
+                if raw.shape != (len(times), 9) or valid.shape != times.shape or len(times) < 2 or not np.all(np.diff(times) > 0):
+                    raise ValueError(f"Invalid cache: {candidate}")
+                return raw, times, valid
+    if cache_only:
+        raise FileNotFoundError(f"Missing matching cache for {path} at {sample_fps} FPS ({cached.name})")
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {path}")
@@ -134,11 +141,14 @@ def extract_video(path, model, sample_fps, cache_dir):
     if not raw:
         raise ValueError(f"Empty video: {path}")
     arrays = np.asarray(raw, np.float32), np.asarray(times, np.float64), np.asarray(valid, bool)
-    np.savez_compressed(cached, raw=arrays[0], times=arrays[1], valid=arrays[2])
+    temporary = cached.with_suffix(".tmp")
+    with temporary.open("wb") as f:
+        np.savez_compressed(f, raw=arrays[0], times=arrays[1], valid=arrays[2])
+    temporary.replace(cached)
     return arrays
 
 
-def build(manifest, model, output, cache_dir, sample_fps=15, seq_len=60, stride=15):
+def build(manifest, model, output, cache_dir, sample_fps=15, seq_len=60, stride=15, cache_sources=(), cache_only=False):
     if sample_fps <= 0 or seq_len < 2 or stride < 1:
         raise ValueError("Invalid sampling configuration")
     output = Path(output)
@@ -151,12 +161,14 @@ def build(manifest, model, output, cache_dir, sample_fps=15, seq_len=60, stride=
         if not Path(r["path"]).is_absolute():
             r["path"] = str((Path(manifest).resolve().parent / r["path"]).resolve())
     classes = validate_rows(rows)
+    from training.preflight20 import require_preflight
+    require_preflight(manifest, output.parent / (output.name + "_preflight.json"), sample_fps)
     output.mkdir(parents=True, exist_ok=True)
     report = []
     for split in ("train", "val", "test"):
         X, y, subjects, videos, starts = [], [], [], [], []
         for i, row in enumerate(r for r in rows if r["split"] == split):
-            raw, times, valid = extract_video(row["path"], model, sample_fps, cache_dir)
+            raw, times, valid = extract_video(row["path"], model, sample_fps, cache_dir, cache_sources, cache_only)
             selected = (times >= float(row.get("start_s") or 0)) & (times < float(row.get("end_s") or "inf"))
             raw, times, valid = raw[selected], times[selected], valid[selected]
             accepted = rejected = 0
@@ -193,17 +205,34 @@ def build(manifest, model, output, cache_dir, sample_fps=15, seq_len=60, stride=
     print(f"Dataset saved: {output}")
 
 
-def cache_videos(manifest, model, cache_dir, sample_fps=15, shard_index=0, num_shards=1):
-    """Optional extraction-only stage; resume using the same cache directory."""
+def cache_videos(manifest, model, cache_dir, sample_fps=15, shard_index=0, num_shards=1,
+                 cache_sources=()):
+    """Resume compatible caches; collect all runtime failures without silently dropping videos."""
     if num_shards < 1 or not 0 <= shard_index < num_shards or sample_fps <= 0:
         raise ValueError("Invalid shard or sample rate")
-    with Path(manifest).open(encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.DictReader(f))
-    paths = sorted({str((Path(manifest).resolve().parent / r["path"]).resolve()) for r in rows})
-    selected = paths[shard_index::num_shards]
-    for i, path in enumerate(selected):
-        raw, _, valid = extract_video(path, model, sample_fps, cache_dir)
-        print(f"Cached {i+1}/{len(selected)}: {Path(path).name}, {len(raw)} frames, face={valid.mean():.1%}", flush=True)
+    from training.preflight20 import read_manifest, require_preflight
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    require_preflight(manifest, cache_dir / f"preflight_{shard_index}.json", sample_fps)
+    rows = read_manifest(manifest)
+    paths = sorted({r["path"] for r in rows})[shard_index::num_shards]
+    records = []
+    report_path = cache_dir / f"progress_{shard_index}.json"
+    for i, path in enumerate(paths):
+        print(f"Extract {i+1}/{len(paths)}: {path}", flush=True)
+        try:
+            raw, _, valid = extract_video(path, model, sample_fps, cache_dir, cache_sources)
+            records.append(dict(path=path, status="ok", frames=len(raw), valid_fraction=float(valid.mean())))
+        except Exception as exc:
+            records.append(dict(path=path, status="error", error=f"{type(exc).__name__}: {exc}"))
+            print(f"FAILED: {path}: {exc}", flush=True)
+        temporary = report_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(records, indent=2), encoding="utf-8")
+        temporary.replace(report_path)
+    failures = sum(r["status"] == "error" for r in records)
+    if failures:
+        raise RuntimeError(f"{failures} videos failed; successful caches retained. Inspect {report_path}; do not train incomplete data.")
+    print(f"Shard {shard_index}: {len(paths)} videos ready", flush=True)
 
 
 def main():
@@ -212,19 +241,30 @@ def main():
     p = sub.add_parser("manifest-rldd")
     p.add_argument("--root", required=True); p.add_argument("--output", required=True)
     p.add_argument("--include-low", action="store_true")
+    p = sub.add_parser("preflight")
+    p.add_argument("--manifest", required=True); p.add_argument("--output", required=True)
+    p.add_argument("--sample-fps", type=float)
     p = sub.add_parser("build")
     p.add_argument("--manifest", required=True); p.add_argument("--model", required=True)
+    p.add_argument("--cache-sources", nargs="*", default=[])
+    p.add_argument("--cache-only", action="store_true")
     p.add_argument("--output", default="data/processed20")
     p.add_argument("--cache-dir", default="data/cache20")
     p.add_argument("--sample-fps", type=float, default=15)
     p.add_argument("--seq-len", type=int, default=60); p.add_argument("--stride", type=int, default=15)
     p = sub.add_parser("cache")
+    p.add_argument("--cache-sources", nargs="*", default=[])
     p.add_argument("--manifest", required=True); p.add_argument("--model", required=True)
     p.add_argument("--cache-dir", required=True); p.add_argument("--sample-fps", type=float, default=15)
     p.add_argument("--shard-index", type=int, default=0); p.add_argument("--num-shards", type=int, default=1)
     args = vars(parser.parse_args()); command = args.pop("command")
     if command == "manifest-rldd":
         rldd_manifest(**args)
+    elif command == "preflight":
+        from training.preflight20 import preflight
+        report = preflight(**args)
+        if report["failed"]:
+            raise SystemExit(2)
     elif command == "cache":
         cache_videos(**args)
     else:
