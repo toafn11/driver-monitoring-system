@@ -134,13 +134,17 @@ class FaceAnalyzer:
         (150.0,  -150.0, -125.0),
     ], dtype=np.float64)
 
-    def __init__(self, model_path: Optional[str] = None, use_image_mode: bool = False):
+    def __init__(self, model_path: Optional[str] = None, use_image_mode: bool = False,
+                 pose_convention: str = "legacy"):
         """
         Args:
             model_path: Path to face_landmarker.task file.
             use_image_mode: If True, use RunningMode.IMAGE (no timestamp needed).
                             If False, use RunningMode.VIDEO (needs sequential frames).
         """
+        if pose_convention not in ("legacy", "camera-v2"):
+            raise ValueError("Unknown pose convention")
+        self.pose_convention = pose_convention
         path = model_path or str(_MODEL_PATH)
         if not Path(path).exists():
             raise FileNotFoundError(
@@ -283,6 +287,17 @@ class FaceAnalyzer:
             return 0.0, 0.0, 0.0
 
         rot_mat, _ = cv2.Rodrigues(rvec)
+        if self.pose_convention == "camera-v2":
+            # The reference face has +Y up, whereas image coordinates have +Y
+            # down. Remove the neutral 180-degree X rotation before extracting
+            # camera-axis angles: X=pitch, Y=yaw, Z=roll. Legacy weights retain
+            # their original convention by default.
+            rot_mat = rot_mat @ np.diag([1.0, -1.0, -1.0])
+            sy = np.hypot(rot_mat[0, 0], rot_mat[1, 0])
+            pitch = np.degrees(np.arctan2(rot_mat[2, 1], rot_mat[2, 2]))
+            yaw = np.degrees(np.arctan2(-rot_mat[2, 0], sy))
+            roll = np.degrees(np.arctan2(rot_mat[1, 0], rot_mat[0, 0]))
+            return float(yaw), float(pitch), float(roll)
         sy = np.sqrt(rot_mat[0, 0] ** 2 + rot_mat[1, 0] ** 2)
         if sy > 1e-6:
             roll  = np.degrees(np.arctan2(rot_mat[2, 1], rot_mat[2, 2]))

@@ -3,6 +3,10 @@
 > **Hệ thống AI nhận diện buồn ngủ và mất tập trung tài xế**  
 > Đại học Cần Thơ · Trường CNTT-TT · 2026
 
+> **Phiên bản 20 đặc trưng đang chuẩn bị train:** dùng [hướng dẫn Kaggle mới](KAGGLE_20_FEATURES.md)
+> và `kaggle_train20.ipynb`. Checkpoint cũ là 12 đặc trưng; phần hướng dẫn legacy bên dưới
+> chưa áp dụng cho checkpoint mới. Chưa có kết quả thực nghiệm của phiên bản 20 đặc trưng.
+
 ---
 
 ## ⚡ Chạy nhanh (Rule-Based, không cần train)

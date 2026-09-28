@@ -1,0 +1,6 @@
+# Keep Kaggle's preinstalled CUDA-compatible PyTorch. Install missing packages.
+# Actual versions are recorded in each training run; no GPU package replacement.
+numpy>=1.26,<3
+scipy>=1.11,<2
+mediapipe>=0.10.20,<2
+torch>=2.2,<3

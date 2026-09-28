@@ -134,4 +134,3 @@ QUICK_COMMANDS = """
 if __name__ == "__main__":
     print(DATASET_GUIDE)
     print(QUICK_COMMANDS)
-"""
