@@ -1,3 +1,5 @@
+> Cập nhật sau lỗi FPS: dùng 3 notebook `kaggle_01_extract20.ipynb`, `kaggle_02_build20.ipynb`, `kaggle_03_train20.ipynb`. Xem [hướng dẫn từng bước](HUONG_DAN_KAGGLE_TUNG_BUOC.md). Bản `kaggle_train20.ipynb` một lượt đã ngừng dùng.
+
 # 🚗 Driver Monitoring System — THS2026-77
 
 > **Hệ thống AI nhận diện buồn ngủ và mất tập trung tài xế**  

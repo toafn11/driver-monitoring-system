@@ -1,3 +1,5 @@
+> Cập nhật sau lỗi FPS: dùng 3 notebook `kaggle_01_extract20.ipynb`, `kaggle_02_build20.ipynb`, `kaggle_03_train20.ipynb`. Xem [hướng dẫn từng bước](HUONG_DAN_KAGGLE_TUNG_BUOC.md). Bản `kaggle_train20.ipynb` một lượt đã ngừng dùng.
+
 # Huấn luyện phiên bản 20 đặc trưng — kế hoạch trước mắt
 
 Ngày đối chiếu dataset: 27/09/2026. Các checkpoint 12 đặc trưng cũ được giữ nguyên.
