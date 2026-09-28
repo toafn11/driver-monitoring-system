@@ -42,7 +42,8 @@ class PreparationTest(unittest.TestCase):
             manifest = root/'manifest.csv'
             with manifest.open('w', newline='') as f:
                 w = csv.DictWriter(f, fieldnames=list(rows[0])); w.writeheader(); w.writerows(rows)
-            with patch('core.face_analyzer.FaceAnalyzer', DetectorFixture):
+            with patch('core.face_analyzer.FaceAnalyzer', DetectorFixture), \
+                 patch('training.video_timestamps20.decoded_timestamps', return_value=np.arange(120)/30):
                 DetectorFixture.calls = 0
                 raw, times, valid = extract_video(rows[0]['path'], model, 15, root/'cache')
                 self.assertEqual(len(raw), 60)

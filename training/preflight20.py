@@ -77,7 +77,18 @@ def preflight(manifest, output, sample_fps=None):
                     if result["passed"]:
                         record["warnings"].append(f"Seek probes failed at {failed_probes}; sequential decode passed")
                     else:
-                        record["issues"].append(f"Decode probes failed at {failed_probes}; {result['reason']} ({result['decoded_frames']}/{count} frames)")
+                        from training.video_timestamps20 import decoded_timestamps
+                        times = decoded_timestamps(path)
+                        record["ffprobe_audit"] = dict(decoded_frames=len(times),
+                                                      last_timestamp_s=float(times[-1]),
+                                                      strictly_increasing=True)
+                        if len(times) == result["decoded_frames"]:
+                            record["warnings"].append(
+                                f"Metadata count {count} differs from decoded count {len(times)}; "
+                                "OpenCV and FFprobe agree; FFprobe reports no decode errors and timestamps increase")
+                        else:
+                            record["issues"].append(
+                                f"Decoder count disagreement: OpenCV={result['decoded_frames']}, FFprobe={len(times)}, metadata={count}")
         except Exception as exc:
             record["issues"].append(f"{type(exc).__name__}: {exc}")
         finally:
@@ -87,7 +98,7 @@ def preflight(manifest, output, sample_fps=None):
     report = dict(videos=records, total=len(records),
                   failed=sum(bool(r["issues"]) for r in records), target_fps=sample_fps,
                   suggested_fps=min(10, math.floor(min(rates))) if rates and min(rates) >= 1 else None,
-                  limitation="First/middle/end probes; failed seeks trigger full sequential decode with at most one missing frame allowed for count rounding. Decoder-concealed corruption is not detected. Timestamps are diagnostic; extraction assumes CFR frame_index/FPS. VFR is not certified by this audit.")
+                  limitation="Quick seek probes, then sequential checks for failures. Count shortages require agreement with error-free FFprobe decoding and increasing timestamps. Decoder-concealed damage is not excluded. Extraction independently validates every frame timestamp using FFprobe.")
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")

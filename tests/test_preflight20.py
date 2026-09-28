@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import cv2
 import numpy as np
 from training.preflight20 import preflight, sequential_probe
@@ -11,6 +11,25 @@ from training.prepare20 import build, cache_videos
 
 
 class PreflightTest(unittest.TestCase):
+    def test_metadata_shortage_requires_independent_count_agreement(self):
+        with tempfile.TemporaryDirectory() as d:
+            cap = MagicMock()
+            cap.isOpened.return_value = True
+            cap.get.side_effect = lambda prop: 30 if prop == cv2.CAP_PROP_FPS else (100 if prop == cv2.CAP_PROP_FRAME_COUNT else 0)
+            cap.read.return_value = (False, None)
+            with patch('training.preflight20.read_manifest', return_value=[dict(path='fixture.mov')]), \
+                 patch('cv2.VideoCapture', return_value=cap), \
+                 patch('training.preflight20.sequential_probe', return_value=dict(decoded_frames=90, passed=False)), \
+                 patch('training.video_timestamps20.decoded_timestamps', return_value=np.arange(90)/30):
+                report = preflight('manifest', Path(d)/'audit.json', 10)
+                self.assertEqual(report['failed'], 0)
+                self.assertTrue(report['videos'][0]['warnings'])
+            with patch('training.preflight20.read_manifest', return_value=[dict(path='fixture.mov')]), \
+                 patch('cv2.VideoCapture', return_value=cap), \
+                 patch('training.preflight20.sequential_probe', return_value=dict(decoded_frames=90, passed=False)), \
+                 patch('training.video_timestamps20.decoded_timestamps', return_value=np.arange(91)/30):
+                self.assertEqual(preflight('manifest', Path(d)/'bad.json', 10)['failed'], 1)
+
     def test_failed_seek_recovers_only_with_complete_sequential_decode(self):
         real_capture = cv2.VideoCapture
         class BrokenSeek:

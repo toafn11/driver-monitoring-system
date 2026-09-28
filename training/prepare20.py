@@ -88,10 +88,12 @@ def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_on
     import cv2
     from core.face_analyzer import FaceAnalyzer
     sample_fps = int(sample_fps) if float(sample_fps).is_integer() else float(sample_fps)
+    from training.video_timestamps20 import decoded_timestamps, TIMESTAMP_VERSION
     model = Path(model)
     stat = Path(path).stat()
     signature = dict(path=str(Path(path).resolve()), size=stat.st_size,
                      mtime_ns=stat.st_mtime_ns, sample_fps=sample_fps, pose_convention="camera-v2",
+                     timestamp_version=TIMESTAMP_VERSION,
                      model_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
                      extractor_sha256=hashlib.sha256(
                          (Path(__file__).parents[1] / "core/face_analyzer.py").read_bytes()).hexdigest())
@@ -108,24 +110,28 @@ def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_on
                 return raw, times, valid
     if cache_only:
         raise FileNotFoundError(f"Missing matching cache for {path} at {sample_fps} FPS ({cached.name})")
+    source_times = decoded_timestamps(path)
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {path}")
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if not np.isfinite(fps) or fps < sample_fps:
+    effective_fps = (len(source_times)-1) / source_times[-1]
+    if effective_fps + 1e-6 < sample_fps:
         cap.release()
-        raise ValueError(f"Source FPS {fps} below target {sample_fps}: {path}; do not duplicate frames")
+        raise ValueError(f"Decoded source FPS {effective_fps} below target {sample_fps}: {path}")
     analyzer = FaceAnalyzer(model_path=str(model), use_image_mode=True, pose_convention="camera-v2")
     raw, times, valid = [], [], []
     frame_idx, next_time = 0, 0.0
     try:
         while cap.grab():
-            timestamp = frame_idx / fps
+            if frame_idx >= len(source_times):
+                raise ValueError(f"OpenCV decoded more frames than FFprobe: {path}")
+            timestamp = source_times[frame_idx]
             frame_idx += 1
             if timestamp + 1e-8 < next_time:
                 continue
             ok, frame = cap.retrieve()
-            next_time += 1.0 / sample_fps
+            # Skip elapsed sampling slots rather than duplicating frames after a gap.
+            next_time = (np.floor((timestamp + 1e-8) * sample_fps) + 1) / sample_fps
             if not ok:
                 raise ValueError(f"Frame decode failed in {path}")
             h, w = frame.shape[:2]
@@ -138,6 +144,8 @@ def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_on
     finally:
         analyzer.close()
         cap.release()
+    if frame_idx != len(source_times):
+        raise ValueError(f"Decoder count mismatch: OpenCV={frame_idx}, FFprobe={len(source_times)}: {path}")
     if not raw:
         raise ValueError(f"Empty video: {path}")
     arrays = np.asarray(raw, np.float32), np.asarray(times, np.float64), np.asarray(valid, bool)
@@ -191,13 +199,14 @@ def build(manifest, model, output, cache_dir, sample_fps=15, seq_len=60, stride=
     preprocessing = dict(schema=SCHEMA, sample_fps=sample_fps, seq_len=seq_len, stride=stride,
                          min_valid=0.8, max_missing_seconds=0.2, feature_names=FEATURE_NAMES,
                          detector_mode="IMAGE", pose_convention="camera-v2", resize_width=640,
-                         timestamp_source="frame_index/source_fps")
+                         timestamp_source="ffprobe_best_effort_timestamp_time",
+                         timestamp_version="ffprobe-best-effort-v1")
     code_root = Path(__file__).parents[1]
     metadata = dict(classes=classes, preprocessing=preprocessing, videos=report,
                     manifest_sha256=hashlib.sha256(Path(manifest).read_bytes()).hexdigest(),
                     face_model_sha256=hashlib.sha256(Path(model).read_bytes()).hexdigest(),
                     code_sha256={name: hashlib.sha256((code_root/name).read_bytes()).hexdigest()
-                                 for name in ("core/features20.py", "core/face_analyzer.py", "training/prepare20.py")},
+                                 for name in ("core/features20.py", "core/face_analyzer.py", "training/prepare20.py", "training/video_timestamps20.py")},
                     extraction_versions={name: importlib.metadata.version(name) for name in ("mediapipe", "numpy", "scipy")})
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     with (output / "manifest.csv").open("w", newline="", encoding="utf-8") as f:
