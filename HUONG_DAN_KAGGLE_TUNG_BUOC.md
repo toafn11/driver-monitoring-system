@@ -1,5 +1,13 @@
 # Chạy lại RLDD sau lỗi FPS — hướng dẫn thao tác
 
+## Khi notebook mới vẫn báo nguyên lỗi cũ
+
+Notebook hiện đã bổ sung kiểm tra hash mã và đường dẫn module, đồng thời chạy audit/trích xuất bằng tiến trình Python mới. Chỉ đổi `REV` hoặc import notebook trong cùng kernel trước đây chưa đủ: Python có thể giữ `training.preflight20` cũ trong `sys.modules`.
+
+Import lại notebook 01 đã cập nhật, chạy từ cell đầu với `RUN_EXTRACTION=False`. Cell đầu phải in `Code revision VERIFIED: a637d62`, ba dòng `Verified module` có đường dẫn thuộc `/kaggle/working/code_a637d62/`, và `Verified timestamp version: ffprobe-best-effort-v1`. Nếu không có các dòng này thì chưa chạy bootstrap mới. Các notebook 02/03 cũng đã cập nhật bootstrap; dùng bản mới khi đến bước đó.
+
+Nếu audit vẫn thất bại, gửi log mới cùng mục video trong inventory. Không bỏ dòng chặn lỗi: với đúng mã mới, trường hợp thiếu frame sẽ có `ffprobe_audit` hoặc thông báo lỗi FFprobe/không khớp số frame, thay vì chỉ lỗi thiếu frame của bản 5a28ee8. Bản sửa xử lý việc nạp mã cũ, không khẳng định mọi video Kaggle đã qua kiểm tra.
+
 ## Đã sửa gì?
 
 Log cũ dừng sau 35 video vì video người 18 có FPS khoảng 12,002, thấp hơn cấu hình 15 FPS. Chưa có epoch train nào hoàn thành trong log đó.
