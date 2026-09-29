@@ -83,10 +83,15 @@ def validate_rows(rows):
     return sorted(split_labels["train"])
 
 
-def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_only=False):
-    # Imported lazily so manifest checks work without MediaPipe/OpenCV.
-    import cv2
-    from core.face_analyzer import FaceAnalyzer
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as f:
+        for block in iter(lambda: f.read(8 * 1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def cache_signature(path, model, sample_fps):
     sample_fps = int(sample_fps) if float(sample_fps).is_integer() else float(sample_fps)
     from training.video_timestamps20 import decoded_timestamps, TIMESTAMP_VERSION, timestamp_exception
     model = Path(model)
@@ -100,11 +105,42 @@ def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_on
     exception = timestamp_exception(path)
     if exception:
         signature["timestamp_exception"] = exception
+    return signature
+
+
+def cache_filename(path, model, sample_fps):
+    return hashlib.sha256(json.dumps(cache_signature(path, model, sample_fps), sort_keys=True).encode()).hexdigest() + ".npz"
+
+
+def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_only=False):
+    import cv2
+    from core.face_analyzer import FaceAnalyzer
+    from training.video_timestamps20 import decoded_timestamps, timestamp_exception
+    exception = timestamp_exception(path)
+    signature = cache_signature(path, model, sample_fps)
     key = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / f"{key}.npz"
-    for candidate in [cached] + [Path(root) / cached.name for root in cache_sources]:
+    candidates = [cached] + [Path(root) / cached.name for root in cache_sources]
+    if not any(p.exists() for p in candidates):
+        # A remount may change mtime. Only portable caches with a matching full
+        # video checksum may ignore that field; legacy files need explicit migration.
+        comparable = {k:v for k,v in signature.items() if k != 'mtime_ns'}
+        source_digest = None
+        for root in [cache_dir] + list(map(Path, cache_sources)):
+            for p in root.glob('*.npz'):
+                with np.load(p, allow_pickle=False) as d:
+                    if 'source_signature' not in d or 'source_sha256' not in d:
+                        continue
+                    old = json.loads(str(d['source_signature'].item()))
+                    if {k:v for k,v in old.items() if k != 'mtime_ns'} != comparable:
+                        continue
+                    if source_digest is None:
+                        source_digest = file_sha256(path)
+                    if str(d['source_sha256'].item()) == source_digest:
+                        candidates.append(p)
+    for candidate in candidates:
         if candidate.exists():
             with np.load(candidate, allow_pickle=False) as data:
                 raw, times, valid = data["raw"], data["times"], data["valid"]
@@ -157,7 +193,9 @@ def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_on
     temporary = cached.with_suffix(".tmp")
     with temporary.open("wb") as f:
         np.savez_compressed(f, raw=arrays[0], times=arrays[1], valid=arrays[2],
-                            timestamp_exception=np.asarray(exception or "none"))
+                            timestamp_exception=np.asarray(exception or "none"),
+                            source_signature=np.asarray(json.dumps(signature, sort_keys=True)),
+                            source_sha256=np.asarray(file_sha256(path)))
     temporary.replace(cached)
     return arrays
 
