@@ -88,7 +88,7 @@ def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_on
     import cv2
     from core.face_analyzer import FaceAnalyzer
     sample_fps = int(sample_fps) if float(sample_fps).is_integer() else float(sample_fps)
-    from training.video_timestamps20 import decoded_timestamps, TIMESTAMP_VERSION
+    from training.video_timestamps20 import decoded_timestamps, TIMESTAMP_VERSION, timestamp_exception
     model = Path(model)
     stat = Path(path).stat()
     signature = dict(path=str(Path(path).resolve()), size=stat.st_size,
@@ -97,6 +97,9 @@ def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_on
                      model_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
                      extractor_sha256=hashlib.sha256(
                          (Path(__file__).parents[1] / "core/face_analyzer.py").read_bytes()).hexdigest())
+    exception = timestamp_exception(path)
+    if exception:
+        signature["timestamp_exception"] = exception
     key = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -127,6 +130,8 @@ def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_on
                 raise ValueError(f"OpenCV decoded more frames than FFprobe: {path}")
             timestamp = source_times[frame_idx]
             frame_idx += 1
+            if frame_idx > 1 and timestamp == source_times[frame_idx - 2]:
+                continue  # only the explicitly verified duplicate can reach this point
             if timestamp + 1e-8 < next_time:
                 continue
             ok, frame = cap.retrieve()
@@ -151,7 +156,8 @@ def extract_video(path, model, sample_fps, cache_dir, cache_sources=(), cache_on
     arrays = np.asarray(raw, np.float32), np.asarray(times, np.float64), np.asarray(valid, bool)
     temporary = cached.with_suffix(".tmp")
     with temporary.open("wb") as f:
-        np.savez_compressed(f, raw=arrays[0], times=arrays[1], valid=arrays[2])
+        np.savez_compressed(f, raw=arrays[0], times=arrays[1], valid=arrays[2],
+                            timestamp_exception=np.asarray(exception or "none"))
     temporary.replace(cached)
     return arrays
 

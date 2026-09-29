@@ -81,7 +81,7 @@ def preflight(manifest, output, sample_fps=None):
                         times = decoded_timestamps(path)
                         record["ffprobe_audit"] = dict(decoded_frames=len(times),
                                                       last_timestamp_s=float(times[-1]),
-                                                      strictly_increasing=True)
+                                                      strictly_increasing=all(b > a for a, b in zip(times, times[1:])))
                         if len(times) == result["decoded_frames"]:
                             record["warnings"].append(
                                 f"Metadata count {count} differs from decoded count {len(times)}; "

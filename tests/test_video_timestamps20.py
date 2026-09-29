@@ -5,12 +5,24 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 import numpy as np
-from training.video_timestamps20 import decoded_timestamps
+from training.video_timestamps20 import decoded_timestamps, validate_timestamps
 from training.prepare20 import extract_video
 from test_prepare20 import video, DetectorFixture
 
 
 class TimestampTest(unittest.TestCase):
+    def test_only_observed_duplicate_is_accepted(self):
+        path='/kaggle/input/datasets/thuannn18022005/uta-rldd-full/Fold1_part2/Fold1_part2/11/0.mp4'
+        times=np.arange(18818,dtype=float)*(501.9471/15026)
+        times[15027]=times[15026]
+        accepted=validate_timestamps(times,path)
+        self.assertEqual(len(accepted),18818)
+        self.assertEqual(np.flatnonzero(np.diff(accepted)==0).tolist(),[15026])
+        with self.assertRaises(ValueError): validate_timestamps(times,'/other/11/0.mp4')
+        changed=times.copy(); changed[3]=changed[2]
+        with self.assertRaises(ValueError): validate_timestamps(changed,path)
+        with self.assertRaises(ValueError): validate_timestamps(times[:-1],path)
+
     def probe(self, times, stderr=""):
         output = json.dumps(dict(frames=[dict(best_effort_timestamp_time=t) for t in times]))
         with patch('shutil.which', return_value='ffprobe'), patch('subprocess.run', return_value=SimpleNamespace(returncode=0, stdout=output, stderr=stderr)):
