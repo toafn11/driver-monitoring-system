@@ -17,7 +17,7 @@ class BootstrapTest(unittest.TestCase):
         activation = source.split('# BEGIN VERIFIED PROJECT ACTIVATION\n')[1].split('# END VERIFIED PROJECT ACTIVATION')[0]
         with tempfile.TemporaryDirectory() as d:
             with zipfile.ZipFile(io.BytesIO(subprocess.check_output(
-                    ['git','archive','--format=zip','a637d62'], cwd=root))) as z:
+                    ['git','archive','--format=zip',source.split("REV = '")[1].split("'")[0]], cwd=root))) as z:
                 z.extractall(d)
             script = '''import sys, types
 from pathlib import Path
